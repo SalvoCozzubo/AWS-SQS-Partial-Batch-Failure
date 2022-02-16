@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  aws-sqs-batch-failure
+Transform: AWS::Serverless-2016-10-31
+Globals:
+  Function:
+    Runtime: nodejs14.x
+    Architectures:
+      - x86_64
+    MemorySize: 128
+    Timeout: 30
+    Handler: handler.index
+    Layers:
+      - !Ref Dependecies
+
+Resources:
+  Dependecies:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - nodejs14.x
+      ContentUri: ./src/dependecies
+    Metadata:
+      BuildMethod: nodejs14.x
+
+  MainQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DLQQueue.Arn
+        maxReceiveCount: 3
+  
+  DLQQueue:
+    Type: AWS::SQS::Queue
+
+  ConsumerQueueFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src/consumer
+      Description: Read elements from Queue
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt DLQQueue.QueueName
+        - SQSPollerPolicy:
+            QueueName: !GetAtt MainQueue.QueueName
+
+  EventSQS:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      FunctionName: !GetAtt ConsumerQueueFunction.Arn
+      EventSourceArn: !GetAtt MainQueue.Arn
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+  ProducerQueueFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src/producer
+      Description: Add elements in queue
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref MainQueue
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt MainQueue.QueueName
